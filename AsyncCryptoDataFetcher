@@ -1,0 +1,160 @@
+import ccxt.async_support as ccxt_async
+import pandas as pd
+from datetime import datetime
+import asyncio
+import time
+class AsyncCryptoDataFetcher:
+    """
+    Una clase asíncrona para adquirir datos históricos (OHLCV) de criptomonedas
+    utilizando la librería ccxt.async_support.
+
+    Permite la obtención concurrente de datos para múltiples símbolos.
+
+    Atributos:
+        exchange_id (str): El ID del exchange (ej. 'binance', 'coinbasepro').
+    """
+
+    def __init__(self, exchange_id: str):
+        """
+        Inicializa el AsyncCryptoDataFetcher.
+
+        Args:
+            exchange_id (str): El ID del exchange.
+        
+        Raises:
+            ValueError: Si el exchange no es soportado por ccxt.
+        """
+        try:
+            self.exchange_class = getattr(ccxt_async, exchange_id)
+        except AttributeError:
+            raise ValueError(f"El exchange '{exchange_id}' no es soportado por ccxt.")
+        self.exchange_id = exchange_id
+
+    async def _validate_market(self, exchange: ccxt_async.Exchange, symbol: str):
+        """Valida si el mercado (símbolo) existe en el exchange."""
+        try:
+            await exchange.load_markets()
+            if symbol not in exchange.markets:
+                raise ValueError(f"El símbolo '{symbol}' no fue encontrado en {self.exchange_id}.")
+        except ccxt_async.BaseError as e:
+            print(f"Error al cargar los mercados de {self.exchange_id}: {e}")
+            raise
+
+    async def fetch_historical_data(self, symbol: str, timeframe: str, start_date_str: str) -> pd.DataFrame:
+        """
+        Obtiene todos los datos OHLCV para un único símbolo desde una fecha de inicio.
+
+        Args:
+            symbol (str): El par de trading a obtener.
+            timeframe (str): El intervalo de tiempo de las velas.
+            start_date_str (str): La fecha de inicio en formato 'YYYY-MM-DD'.
+
+        Returns:
+            pd.DataFrame: Un DataFrame con los datos OHLCV, indexado por fecha.
+                          Retorna un DataFrame vacío si no hay datos.
+        """
+        exchange = self.exchange_class()
+        try:
+            await self._validate_market(exchange, symbol)
+
+            if not exchange.has['fetchOHLCV']:
+                print(f"El exchange {self.exchange_id} no soporta la obtención de datos OHLCV.")
+                return pd.DataFrame()
+
+            print(f"[{symbol}] Iniciando la descarga de datos...")
+
+            since = exchange.parse8601(f"{start_date_str}T00:00:00Z")
+            all_ohlcv = []
+
+            while since < exchange.milliseconds():
+                try:
+                    limit = 1000
+                    ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, since, limit)
+                    
+                    if not ohlcv:
+                        break
+
+                    all_ohlcv.extend(ohlcv)
+                    last_timestamp = ohlcv[-1][0]
+                    since = last_timestamp + 1
+                    
+                    first_date = datetime.utcfromtimestamp(ohlcv[0][0] / 1000).strftime('%Y-%m-%d')
+                    print(f"[{symbol}] Obtenidas {len(ohlcv)} velas desde {first_date}")
+
+                    # No es necesario un sleep explícito si el rate limiting de ccxt está habilitado (por defecto)
+                    # await asyncio.sleep(exchange.rateLimit / 1000)
+
+                except ccxt_async.NetworkError as e:
+                    print(f"[{symbol}] Error de red, reintentando... {e}")
+                    await asyncio.sleep(5)
+                except ccxt_async.ExchangeError as e:
+                    print(f"[{symbol}] Error del exchange: {e}")
+                    break
+        
+        finally:
+            # Es crucial cerrar la sesión del exchange para liberar recursos
+            await exchange.close()
+
+        if not all_ohlcv:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        df = df[~df.index.duplicated(keep='first')]
+        
+        print(f"[{symbol}] Descarga completada. Total de velas: {len(df)}")
+        return df
+
+async def main():
+    """
+    Función principal para demostrar la descarga concurrente de datos.
+    """
+    # --- Parámetros de Configuración ---
+    EXCHANGE_ID = 'binance'
+    TIMEFRAME = '1d'
+    START_DATE = '2023-01-01'
+    
+    # Lista de símbolos para descargar concurrentemente
+    symbols_to_fetch = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT']
+
+    print("--- Iniciando Descarga Concurrente de Datos ---")
+    start_time = time.time()
+
+    try:
+        fetcher = AsyncCryptoDataFetcher(exchange_id=EXCHANGE_ID)
+        
+        # Crear una tarea de descarga para cada símbolo
+        tasks = [
+            fetcher.fetch_historical_data(symbol, TIMEFRAME, START_DATE) 
+            for symbol in symbols_to_fetch
+        ]
+        
+        # Ejecutar todas las tareas en paralelo y esperar a que terminen
+        results = await asyncio.gather(*tasks)
+        
+        # Procesar los resultados
+        for symbol, data_df in zip(symbols_to_fetch, results):
+            if not data_df.empty:
+                print(f"\n--- Resumen para {symbol} ---")
+                print(data_df.head())
+                
+                # Guardar en CSV
+                output_filename = f"{EXCHANGE_ID}_{symbol.replace('/', '_')}_{TIMEFRAME}_async.csv"
+                data_df.to_csv(output_filename)
+                print(f"Datos de {symbol} guardados en '{output_filename}'")
+            else:
+                print(f"\nNo se pudieron obtener datos para {symbol}.")
+
+    except ValueError as e:
+        print(f"Error de configuración: {e}")
+    except Exception as e:
+        print(f"Ocurrió un error en la ejecución principal: {e}")
+
+    end_time = time.time()
+    print(f"\n--- Tiempo total de ejecución: {end_time - start_time:.2f} segundos ---")
+
+
+if __name__ == "__main__":
+    # Ejecutar el bucle de eventos de asyncio
+    asyncio.run(main())
