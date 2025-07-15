@@ -1,0 +1,26 @@
+# Entorno virtual
+venv/
+
+# Archivos de caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Datos históricos (pueden ser muy grandes)
+datos_historicos/
+
+# Archivos de configuración del sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de configuración del IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Archivos de registro
+*.log
+
+# Archivos de entorno
+.env
