@@ -40,3 +40,6 @@ python asynccriptodatafectheralamcenamiento.py
 Los datos se guardarán en archivos CSV con el formato:
 - `okx_[PAR]_1d_incremental.csv` (datos durante la descarga)
 - `okx_[PAR]_1d_async_to_[FECHA]_final.csv` (dataset completo)
+
+## Nuevo Modo
+La aplicación ahora funciona con un nuevo modo de datos en tiempo real, que permite la adquisición y procesamiento continuo de datos para mejorar la eficiencia y precisión de las operaciones.
