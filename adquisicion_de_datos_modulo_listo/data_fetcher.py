@@ -7,7 +7,9 @@ import logging
 import pytz
 import os
 import json
+import inspect  # Para examinar parámetros de la clase Exchange
 from typing import Optional, Dict, List, Any, Literal
+import ccxt.async_support as ccxt_async
 
 # Configurar el logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -93,7 +95,61 @@ class AsyncCryptoDataFetcher:
             pd.DataFrame: Un DataFrame con los datos OHLCV, indexado por fecha.
                           Retorna un DataFrame vacío si no hay datos.
         """
-        exchange: ccxt_async.Exchange = self.exchange_class(**self.exchange_options)
+                # Preparar opciones del exchange
+        # Obtener requiredOptions antes de usarlas
+        exchange_required = getattr(self.exchange_class, 'requiredOptions', {})
+        # Preparar opciones del exchange, solo incluir claves con valor no None
+        exchange_opts = {}
+        for key in ['apiKey', 'secret', 'enableRateLimit']:
+            if self.exchange_options.get(key) is not None:
+                exchange_opts[key] = self.exchange_options[key]
+        # Solo incluir 'options' si es requerido por el exchange
+        if 'options' in self.exchange_options and 'options' in exchange_required:
+            exchange_opts['options'] = self.exchange_options['options']
+        # Si hay 'defaultType' en exchange_options pero no en options, anidarlo correctamente
+        if 'defaultType' in self.exchange_options:
+            # Si ya hay un diccionario 'options', lo usamos, sino creamos uno
+            if 'options' not in exchange_opts:
+                exchange_opts['options'] = {}
+            exchange_opts['options']['defaultType'] = self.exchange_options['defaultType']
+        
+        # Añadir opciones válidas directamente al diccionario principal
+        exchange_has = getattr(self.exchange_class, 'has', {})
+        exchange_required = getattr(self.exchange_class, 'requiredOptions', {})
+        
+        for opt in exchange_required:
+            if opt in self.exchange_options:
+                exchange_opts[opt] = self.exchange_options[opt]
+            else:
+                logger.warning(f"Opción requerida '{opt}' faltante para {self.exchange_id}")
+                
+        for opt in ['rateLimit', 'enableRateLimit', 'timeout', 'proxy']:
+            if opt in self.exchange_options and opt in exchange_has:
+                exchange_opts[opt] = self.exchange_options[opt]
+                
+        # Eliminado el parámetro 'options' que causaba el error
+            
+        # Manejar defaultType según la API del exchange
+        # Algunos exchanges requieren defaultType como parámetro de nivel superior
+        if 'defaultType' in self.exchange_options:
+            # Verificar si el exchange acepta el parámetro 'options'
+            exchange_params = inspect.signature(self.exchange_class.__init__).parameters
+            accepts_options = 'options' in exchange_params
+            
+            if accepts_options:
+                # Crear 'options' si no existe
+                if 'options' not in exchange_opts:
+                    exchange_opts['options'] = {}
+                # Mover defaultType a options
+                exchange_opts['options']['defaultType'] = self.exchange_options['defaultType']
+                # Eliminar defaultType de nivel superior
+                if 'defaultType' in exchange_opts:
+                    del exchange_opts['defaultType']
+            else:
+                # Mantener defaultType como parámetro de nivel superior
+                exchange_opts['defaultType'] = self.exchange_options['defaultType']
+        
+        exchange: ccxt_async.Exchange = self.exchange_class(**exchange_opts)
         try:
             await self._validate_market(exchange, symbol)
 
@@ -214,149 +270,73 @@ class AsyncCryptoDataFetcher:
 
     async def fetch_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
-        Obtiene la información del ticker para un símbolo (snapshot REST).
-        
-        Args:
-            symbol (str): El par de trading a obtener.
-
-        Returns:
-            Optional[Dict[str, Any]]: Un diccionario con la información del ticker, o None si falla.
+        Obtiene la información del ticker para un símbolo.
         """
-        exchange: ccxt_async.Exchange = self.exchange_class(**self.exchange_options)
+        exchange_required = getattr(self.exchange_class, 'requiredOptions', {})
+        exchange_opts = {}
+        for key in ['apiKey', 'secret', 'enableRateLimit']:
+            if self.exchange_options.get(key) is not None:
+                exchange_opts[key] = self.exchange_options[key]
+        if 'options' in self.exchange_options and 'options' in exchange_required:
+            exchange_opts['options'] = self.exchange_options['options']
+        if 'defaultType' in self.exchange_options:
+            if 'options' not in exchange_opts and 'options' in exchange_required:
+                exchange_opts['options'] = {}
+            if 'options' in exchange_opts:
+                exchange_opts['options']['defaultType'] = self.exchange_options['defaultType']
+        exchange: ccxt_async.Exchange = self.exchange_class(**exchange_opts)
         try:
             await self._validate_market(exchange, symbol)
             if not exchange.has['fetchTicker']:
-                logger.warning(f"El exchange {self.exchange_id} no soporta la obtención de tickers (REST).")
+                logger.warning(f"El exchange {self.exchange_id} no soporta la obtención de tickers.")
                 return None
-            
-            logger.info(f"[{symbol}] Obteniendo ticker (snapshot REST)...")
+            logger.info(f"[{symbol}] Obteniendo ticker...")
             ticker: Dict[str, Any] = await exchange.fetch_ticker(symbol)
             logger.info(f"[{symbol}] Ticker obtenido: {ticker.get('last', 'N/A')}")
             return ticker
         except ccxt_async.BaseError as e:
-            logger.error(f"[{symbol}] Error al obtener ticker (snapshot REST): {e}")
+            logger.error(f"[{symbol}] Error al obtener ticker: {e}")
             return None
         except Exception as e:
-            logger.error(f"[{symbol}] Error inesperado al obtener ticker (snapshot REST): {e}")
+            logger.error(f"[{symbol}] Error inesperado al obtener ticker: {e}")
             return None
         finally:
             await exchange.close()
 
     async def fetch_order_book(self, symbol: str, limit: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
-        Obtiene el libro de órdenes (Order Book) para un símbolo (snapshot REST).
-        
-        Args:
-            symbol (str): El par de trading a obtener.
-            limit (Optional[int]): Límite de entradas del libro de órdenes (ej. 100).
-
-        Returns:
-            Optional[Dict[str, Any]]: Un diccionario con el libro de órdenes, o None si falla.
+        Obtiene el libro de órdenes (Order Book) para un símbolo.
         """
-        exchange: ccxt_async.Exchange = self.exchange_class(**self.exchange_options)
+        exchange_required = getattr(self.exchange_class, 'requiredOptions', {})
+        exchange_opts = {}
+        for key in ['apiKey', 'secret', 'enableRateLimit']:
+            if self.exchange_options.get(key) is not None:
+                exchange_opts[key] = self.exchange_options[key]
+        if 'options' in self.exchange_options and 'options' in exchange_required:
+            exchange_opts['options'] = self.exchange_options['options']
+        if 'defaultType' in self.exchange_options:
+            if 'options' not in exchange_opts and 'options' in exchange_required:
+                exchange_opts['options'] = {}
+            if 'options' in exchange_opts:
+                exchange_opts['options']['defaultType'] = self.exchange_options['defaultType']
+        exchange: ccxt_async.Exchange = self.exchange_class(**exchange_opts)
         try:
             await self._validate_market(exchange, symbol)
             if not exchange.has['fetchOrderBook']:
-                logger.warning(f"El exchange {self.exchange_id} no soporta la obtención del libro de órdenes (REST).")
+                logger.warning(f"El exchange {self.exchange_id} no soporta la obtención del libro de órdenes.")
                 return None
-            
-            logger.info(f"[{symbol}] Obteniendo libro de órdenes (snapshot REST)...")
+            logger.info(f"[{symbol}] Obteniendo libro de órdenes...")
             order_book: Dict[str, Any] = await exchange.fetch_order_book(symbol, limit=limit)
             logger.info(f"[{symbol}] Libro de órdenes obtenido (asks: {len(order_book.get('asks', []))}, bids: {len(order_book.get('bids', []))})")
             return order_book
         except ccxt_async.BaseError as e:
-            logger.error(f"[{symbol}] Error al obtener libro de órdenes (snapshot REST): {e}")
+            logger.error(f"[{symbol}] Error al obtener libro de órdenes: {e}")
             return None
         except Exception as e:
-            logger.error(f"[{symbol}] Error inesperado al obtener libro de órdenes (snapshot REST): {e}")
+            logger.error(f"[{symbol}] Error inesperado al obtener libro de órdenes: {e}")
             return None
         finally:
             await exchange.close()
-
-    async def watch_trades(self, symbol: str, duration_seconds: int, save_path: str) -> None:
-        """
-        Recolecta trades en tiempo real para un símbolo durante una duración específica
-        y los guarda incrementalmente en un archivo JSONL.
-
-        Args:
-            symbol (str): El par de trading a observar.
-            duration_seconds (int): Duración de la recolección en segundos.
-            save_path (str): Ruta del archivo JSONL donde se guardarán los trades.
-        """
-        exchange: ccxt_async.Exchange = self.exchange_class(**self.exchange_options)
-        try:
-            await self._validate_market(exchange, symbol)
-            if not exchange.has['watchTrades']:
-                logger.warning(f"El exchange {self.exchange_id} no soporta la observación de trades (WebSocket).")
-                return
-
-            logger.info(f"[{symbol}] Iniciando recolección de trades en tiempo real por {duration_seconds} segundos...")
-            end_time = time.time() + duration_seconds
-
-            with open(save_path, 'a') as f:
-                while time.time() < end_time:
-                    try:
-                        trades = await exchange.watch_trades(symbol)
-                        for trade in trades:
-                            f.write(json.dumps(trade) + '\n')
-                        logger.info(f"[{symbol}] Recolectados {len(trades)} trades. Tiempo restante: {int(end_time - time.time())}s")
-                    except ccxt_async.NetworkError as e:
-                        logger.warning(f"[{symbol}] Error de red en WebSocket ({e}), reintentando...")
-                        await asyncio.sleep(1) # Esperar un poco antes de reintentar
-                    except ccxt_async.ExchangeError as e:
-                        logger.error(f"[{symbol}] Error del exchange en WebSocket: {e}")
-                        break # Salir si hay un error persistente del exchange
-                    except Exception as e:
-                        logger.error(f"[{symbol}] Ocurrió un error inesperado en watch_trades: {e}")
-                        break
-        except Exception as e:
-            logger.error(f"[{symbol}] Error al configurar watch_trades: {e}")
-        finally:
-            await exchange.close()
-            logger.info(f"[{symbol}] Recolección de trades en tiempo real finalizada.")
-
-    async def watch_order_book(self, symbol: str, duration_seconds: int, save_path: str, limit: Optional[int] = None) -> None:
-        """
-        Recolecta actualizaciones del libro de órdenes en tiempo real para un símbolo durante una duración específica
-        y las guarda incrementalmente en un archivo JSONL.
-
-        Args:
-            symbol (str): El par de trading a observar.
-            duration_seconds (int): Duración de la recolección en segundos.
-            save_path (str): Ruta del archivo JSONL donde se guardarán las actualizaciones del libro de órdenes.
-            limit (Optional[int]): Límite de entradas del libro de órdenes a observar (ej. 100).
-        """
-        exchange: ccxt_async.Exchange = self.exchange_class(**self.exchange_options)
-        try:
-            await self._validate_market(exchange, symbol)
-            if not exchange.has['watchOrderBook']:
-                logger.warning(f"El exchange {self.exchange_id} no soporta la observación del libro de órdenes (WebSocket).")
-                return
-
-            logger.info(f"[{symbol}] Iniciando recolección de libro de órdenes en tiempo real por {duration_seconds} segundos...")
-            end_time = time.time() + duration_seconds
-
-            with open(save_path, 'a') as f:
-                while time.time() < end_time:
-                    try:
-                        order_book = await exchange.watch_order_book(symbol, limit=limit)
-                        # Guardar una copia profunda para evitar que el objeto cambie después de ser serializado
-                        f.write(json.dumps(order_book) + '\n')
-                        logger.info(f"[{symbol}] Actualización de libro de órdenes recibida. Tiempo restante: {int(end_time - time.time())}s")
-                    except ccxt_async.NetworkError as e:
-                        logger.warning(f"[{symbol}] Error de red en WebSocket ({e}), reintentando...")
-                        await asyncio.sleep(1)
-                    except ccxt_async.ExchangeError as e:
-                        logger.error(f"[{symbol}] Error del exchange en WebSocket: {e}")
-                        break
-                    except Exception as e:
-                        logger.error(f"[{symbol}] Ocurrió un error inesperado en watch_order_book: {e}")
-                        break
-        except Exception as e:
-            logger.error(f"[{symbol}] Error al configurar watch_order_book: {e}")
-        finally:
-            await exchange.close()
-            logger.info(f"[{symbol}] Recolección de libro de órdenes en tiempo real finalizada.")
 
     def save_dataframe(self, df: pd.DataFrame, path: str, format: Literal['csv', 'parquet'] = 'csv') -> None:
         """

@@ -1,0 +1,10 @@
+ccxt
+numpy
+python-dotenv
+asyncio
+pytest
+pytest-asyncio
+pandas
+pandas-ta
+scikit-learn
+pyarrow
